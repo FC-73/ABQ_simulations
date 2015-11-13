@@ -1,0 +1,153 @@
+from abaqusConstants import *
+from abaqus import *
+from abaqusConstants import *
+from part import *
+from material import *
+from section import *
+from assembly import *
+from step import *
+from interaction import *
+from load import *
+from mesh import *
+from job import *
+from sketch import *
+from visualization import *
+from connectorBehavior import *
+#import __main__
+#import section
+#import regionToolset
+#import displayGroupMdbToolset as dgm
+#import part
+#import material
+#import assembly
+#import step
+#import interaction
+#import load
+#import mesh
+#import optimization
+#import job
+#import sketch
+#import visualization
+#import xyPlot
+#import displayGroupOdbToolset as dgo
+import connectorBehavior
+execfile('AbaqusScriptFunc.py')
+A=.3
+square = mdb.models['Model-1'].ConstrainedSketch(name='__profile__', sheetSize=10.0)
+square.rectangle(point1=(0.0, 0.0), point2=(1.0, 1.0))
+p = mdb.models['Model-1'].Part(dimensionality=TWO_D_PLANAR,name='Square', type=
+	DEFORMABLE_BODY)
+p.BaseShell(sketch=square)
+face=p.faces
+del mdb.models['Model-1'].sketches['__profile__']
+#t = p.MakeSketchTransform(sketchPlane=face.findAt(coordinates=(0.333333, 
+#        0.333333, 0.0), normal=(0.0, 0.0, 1.0)), sketchPlaneSide=SIDE1, 
+#        origin=(0.5, 0.5, 0.0))
+s1 = mdb.models['Model-1'].ConstrainedSketch(name='__profile__', 
+        sheetSize=2.82, gridSpacing=0.07,)#transform=t)
+g, v, d, c = s1.geometry, s1.vertices, s1.dimensions, s1.constraints
+p.projectReferencesOntoSketch(sketch=s1, filter=COPLANAR_EDGES)
+s1.CircleByCenterPerimeter(center=(0, 0), point1=(0.5, .5))
+s1.RadialDimension(curve=g.findAt((.5, .5)), textPoint=(
+        0.357000052928925, -0.231304287910461), radius=0.5)
+pickedFaces = face.findAt(((A, A, 0.0), ))
+p.PartitionFaceBySketch(faces=pickedFaces, sketch=s1)
+################ Material Properties
+mdb.models['Model-1'].Material(name='Metal')
+mdb.models['Model-1'].materials['Metal'].Elastic(table=((9000000000.0, 0.33), 
+        ))
+mdb.models['Model-1'].materials['Metal'].Plastic(table=((1000000.0, 0.0), (
+        1020000.0, 1)))#, (109000.0, 0.02), (116000.0, 0.039), (123000.0, 
+        #0.05), (131000.0, 0.065), (138000.0, 0.09), (144000.0, 0.138), (
+        #138000.0, 0.18), (133000.0, 0.2)))
+mdb.models['Model-1'].Material(name='HyperElastic')
+mdb.models['Model-1'].materials['HyperElastic'].Hyperelastic(
+        materialType=ISOTROPIC, testData=OFF, type=NEO_HOOKE, 
+        volumetricResponse=VOLUMETRIC_DATA, table=((5000000.0, 1e-08), ))
+mdb.models['Model-1'].Material(name='SoftInclusion')
+mdb.models['Model-1'].materials['SoftInclusion'].Hyperelastic(
+        materialType=ISOTROPIC, testData=OFF, type=NEO_HOOKE, 
+        volumetricResponse=VOLUMETRIC_DATA, table=((50000.0, 1e-08), ))
+################################################################
+mdb.models['Model-1'].HomogeneousSolidSection(name='Circle_Sec', 
+        material='SoftInclusion', thickness=None)
+mdb.models['Model-1'].HomogeneousSolidSection(name='Square', 
+        material='HyperElastic', thickness=None)
+circle_faces = face.findAt(((A, A, 0.0), ))
+circle_reg = p.Set(faces=circle_faces, name='Set-Circle')
+Circle_section = p.SectionAssignment(region=circle_reg, sectionName='Circle_Sec', offset=0.0, 
+        offsetType=MIDDLE_SURFACE, offsetField='', 
+        thicknessAssignment=FROM_SECTION)
+square_faces = face.findAt(((0.8, 0.5, 0.0), ))
+square_region = p.Set(faces=square_faces, name='Set-Square')
+square_section= p.SectionAssignment(region=square_region, sectionName='Square', offset=0.0, 
+        offsetType=MIDDLE_SURFACE, offsetField='', 
+        thicknessAssignment=FROM_SECTION)
+##################################################################################
+#SEED PART PlaneStr=CPE4H,PlaneStress= CPS3,CPS4R
+##################################################################################
+p.seedPart(deviationFactor=0.1,
+    minSizeFactor=0.01, size=.01)
+p.setMeshControls(elemShape=TRI, regions=face)
+p.setElementType(elemTypes=(ElemType(
+    elemCode=CPS3, elemLibrary=STANDARD), ElemType(elemCode=CPS3,
+    elemLibrary=STANDARD, secondOrderAccuracy=OFF, distortionControl=DEFAULT)),
+    regions=(face, ))
+p.generateMesh()
+
+##################################################################################
+#ASSEMBLE
+##################################################################################
+a1 = mdb.models['Model-1'].rootAssembly
+a1.DatumCsysByDefault(CARTESIAN)
+p = mdb.models['Model-1'].parts['Square']
+a1.Instance(name='Square-1', part=p, dependent=ON)
+session.viewports['Viewport: 1'].assemblyDisplay.setValues(
+        adaptiveMeshConstraints=ON)
+
+#mdb.models['Model-1'].rootAssembly.DatumCsysByDefault(CARTESIAN)
+#mdb.models['Model-1'].rootAssembly.Instance(dependent=ON, name='Instance-1',
+#   part=mdb.models['Model-1'].parts['Square'])
+##################################################################################
+#CREATE PERIODIC BOUNDARY CONDITIONS
+##################################################################################
+a1.Set(edges=(
+    mdb.models['Model-1'].rootAssembly.instances['Square-1'].edges,), name='PerBound')
+
+(CoorFixNode,NameRef1, NameRef2)=PeriodicBound2D(mdb,'Model-1','PerBound',[(1.0,0.0),(0.0,1.0)],)
+
+##################################################################################
+#CREATE STEP AND APPLY BC
+##################################################################################
+mdb.models['Model-1'].StaticStep(name='Step-1', nlgeom=ON, previous='Initial')
+mdb.models['Model-1'].steps['Step-1'].setValues(maxNumInc=3000, initialInc=0.01, 
+        minInc=1e-08)
+#Apply boundary conditions on reference nodes
+DefMat=[(1,UNSET),(UNSET,UNSET)]
+mdb.models['Model-1'].DisplacementBC(amplitude=UNSET, createStepName='Step-1',
+    distributionType=UNIFORM, fieldName='', fixed=OFF, localCsys=None, name=
+    'BC-REF-1', region=Region(referencePoints=(
+    mdb.models['Model-1'].rootAssembly.instances[NameRef1].referencePoints[1],
+    )), u1=DefMat[0][0], u2=DefMat[0][1], ur3=UNSET)
+mdb.models['Model-1'].DisplacementBC(amplitude=UNSET, createStepName='Step-1',
+    distributionType=UNIFORM, fieldName='', fixed=OFF, localCsys=None, name=
+    'BC-REF-2', region=Region(referencePoints=(
+    mdb.models['Model-1'].rootAssembly.instances[NameRef2].referencePoints[1],
+    )), u1=DefMat[1][0], u2=DefMat[1][1], ur3=UNSET)
+mdb.models['Model-1'].DisplacementBC(amplitude=UNSET, createStepName='Step-1',
+    distributionType=UNIFORM, fieldName='', fixed=OFF, localCsys=None, name=
+    'BC-FIXNODE', region=Region(
+    nodes=mdb.models['Model-1'].rootAssembly.instances['Square-1'].nodes.getByBoundingSphere(center=CoorFixNode, radius=0.001)), u1=0.0, u2=0.0, ur3=UNSET)
+##################################################################################
+#JOB AND RUN
+##################################################################################
+mdb.Job(atTime=None, contactPrint=OFF, description='', echoPrint=OFF,
+    explicitPrecision=SINGLE, getMemoryFromAnalysis=True, historyPrint=OFF,
+    memory=90, memoryUnits=PERCENTAGE, model='Model-1', modelPrint=OFF,
+    multiprocessingMode=DEFAULT, name='Plane-Stress_SOFTINC_100per_hyper', nodalOutputPrecision=SINGLE,
+    numCpus=1, queue=None, scratch='', type=ANALYSIS, userSubroutine='',
+    waitHours=0, waitMinutes=0)
+mdb.jobs['Plane-Stress_SOFTINC_100per_hyper'].submit(consistencyChecking=OFF)
+
+
+
